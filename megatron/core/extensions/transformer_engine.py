@@ -1984,14 +1984,15 @@ try:
                 activation_offloading,
                 weight_offloading,
                 double_buffering,
+                retain_pinned_cpu_buffers=True,
             )
         elif is_te_min_version("1.10.0.dev0"):
             context, sync_func = _get_cpu_offload_context(
-                enabled, num_layers, model_layers, activation_offloading, weight_offloading
+                enabled, num_layers, model_layers, activation_offloading, weight_offloading, retain_pinned_cpu_buffers=True,
             )
         else:
             context, sync_func = _get_cpu_offload_context(
-                enabled, num_layers, activation_offloading, weight_offloading
+                enabled, num_layers, activation_offloading, weight_offloading, retain_pinned_cpu_buffers=True,
             )
 
         return context, sync_func
