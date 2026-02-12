@@ -33,6 +33,7 @@ from torch.distributed import _coalescing_manager
 from torch.distributed.tensor import DTensor, Replicate, Shard
 
 from .mixed_precision import (
+    fp8_dequantize,
     fp8_discard_transpose_cache,
     fp8_get_raw_data,
     fp8_need_transpose_data,
@@ -2300,12 +2301,18 @@ class ParamAndGradBuffer:
 
                     if is_float8tensor(p_local):
                         old_param_data = fp8_get_raw_data(p_local)
+                        # TransformerEngine GroupedTensor (TE 93d51c8+) may pass views into
+                        # a shared buffer; clone to get owned storage so copy_ and buffer swap work.
+                        if getattr(old_param_data, "_base", None) is not None:
+                            old_param_data = old_param_data.clone()
                         assert old_param_data._base is None
                         new_param_data.detach().copy_(old_param_data)
                         fp8_set_raw_data(p_local, new_param_data)
                         del old_param_data
                         if new_transpose_data is not None:
                             old_transpose_data = fp8_get_raw_data(p_local, True)
+                            if getattr(old_transpose_data, "_base", None) is not None:
+                                old_transpose_data = old_transpose_data.clone()
                             assert old_transpose_data._base is None
                             new_transpose_data.detach().copy_(old_transpose_data)
                             fp8_set_raw_data(p_local, new_transpose_data, True)
@@ -2338,21 +2345,33 @@ class ParamAndGradBuffer:
                             self.param_to_name[p],
                             "not support fp8 DTensor.",
                         )
-                        # Needed to instantiate FP8 parameters. Requires installing
-                        # TransformerEngine.
-                        mbuf.set_item(item_id, p.get_high_precision_init_val())
-                        p.clear_high_precision_init_val()
+                        high_prec_val = p.get_high_precision_init_val()
+                        if high_prec_val is not None:
+                            mbuf.set_item(item_id, high_prec_val)
+                            p.clear_high_precision_init_val()
+                        else:
+                            # Stored high-precision was never set (e.g. GroupedLinear); dequantize.
+                            p_local = to_local_if_dtensor(p)
+                            if is_float8tensor(p_local):
+                                high_prec = fp8_dequantize(p_local)
+                                if high_prec.dtype != mbuf.dtype:
+                                    high_prec = high_prec.to(mbuf.dtype)
+                                mbuf.set_item(item_id, high_prec)
+                            else:
+                                mbuf.set_item(item_id, p_local)
                     else:
                         # Insert a copy of the model weight parameter tensor into
                         # the (high-precision) main weight buffer.
-                        # Nothing else needs to be done, because the main weights
-                        # do not require autograd operations, only possibly sharding.
                         p_local = to_local_if_dtensor(p)
-                        assert not is_float8tensor(p_local), (
-                            self.param_to_name[p],
-                            "fp8 param should use get_high_precision_init_val method.",
-                        )
-                        mbuf.set_item(item_id, p_local)
+                        if is_float8tensor(p_local):
+                            # FP8 param without get_high_precision_init_val (e.g. GroupedLinear
+                            # from TE); dequantize for main weight buffer.
+                            high_prec = fp8_dequantize(p_local)
+                            if high_prec.dtype != mbuf.dtype:
+                                high_prec = high_prec.to(mbuf.dtype)
+                            mbuf.set_item(item_id, high_prec)
+                        else:
+                            mbuf.set_item(item_id, p_local)
 
             if wbuf and wbuf.is_data_distributed:
                 # Free the memory backing the temporarily-allocated bucket associated
