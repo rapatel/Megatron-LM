@@ -691,8 +691,17 @@ class MegatronFSDP(torch.nn.Module):
 
         @torch.compiler.disable
         def _pre_forward_param_unshard(
-            module: nn.Module, args: Tuple[Any, ...], kwargs: Dict[str, Any]
+            module: nn.Module,
+            args: Optional[Tuple[Any, ...]] = None,
+            kwargs: Optional[Dict[str, Any]] = None,
         ):
+            # Forward pre-hooks registered with with_kwargs=True receive (module, args, kwargs).
+            # Some code paths (e.g. TEFusedMLP replaying submodule hooks) call the hook with
+            # only (module, args); treat missing args/kwargs like PyTorch would for a no-kw forward.
+            if args is None:
+                args = ()
+            if kwargs is None:
+                kwargs = {}
             # Unshard the parameters before the forward pass.
             input_training_state = module._training_state
             fsdp_forward_prefetch = True
