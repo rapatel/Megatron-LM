@@ -59,6 +59,7 @@ from megatron.core.utils import is_te_min_version
 
 if HAVE_TE:
     from megatron.core.extensions.transformer_engine import Fp8Padding, Fp8Unpadding
+    import transformer_engine as te
 else:
     Fp8Padding, Fp8Unpadding = None, None
 
