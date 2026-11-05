@@ -3153,6 +3153,11 @@ def _add_distributed_args(parser):
                         'and performance requirements.')
     group.add_argument('--keep-fp8-transpose-cache', action='store_true',
                        help='If set, keep the fp8 transpose cache when using Megatron FSDP.')
+    group.add_argument('--mxfp8-gemm-swizzled-weight-scales', action='store_true',
+                       help='Megatron-FSDP with MXFP8 primary weights: store the scales of dense '
+                       '(non-expert) weights in the GEMM-swizzled layout when casting the master '
+                       'weights, so GEMMs skip swizzling them. Needs a Transformer Engine whose '
+                       'quantize_master_weights accepts gemm_swizzled_scales.')
     group.add_argument('--enable-full-sharding-in-hsdp', action='store_true',
                        help='If set, enable full sharding in megatron-fsdp Hybrid Sharded Data Parallel (HSDP) mode.')
     group.add_argument('--num-distributed-optimizer-instances', type=int, default=1,

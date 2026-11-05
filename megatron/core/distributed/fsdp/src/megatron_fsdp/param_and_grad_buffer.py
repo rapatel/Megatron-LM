@@ -3560,8 +3560,15 @@ class ParamAndGradBuffer:
 
         def _fp8_quantize_params(dense_param_quantize_kwargs, expert_param_quantize_kwargs):
             if len(dense_param_quantize_kwargs["model_params"]) > 0:
-                # If we have FP8 parameters, we need to quantize them.
-                fp8_quantize(data_parallel_group=data_parallel_group, **dense_param_quantize_kwargs)
+                # If we have FP8 parameters, we need to quantize them. Expert weights keep
+                # compact scales for the grouped GEMMs.
+                fp8_quantize(
+                    data_parallel_group=data_parallel_group,
+                    gemm_swizzled_scales=getattr(
+                        self.ddp_config, "mxfp8_gemm_swizzled_weight_scales", False
+                    ),
+                    **dense_param_quantize_kwargs,
+                )
 
             if len(expert_param_quantize_kwargs["model_params"]) > 0:
                 # If we have FP8 expert parameters, we need to quantize them.
