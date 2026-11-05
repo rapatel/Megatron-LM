@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import inspect
 import logging
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -158,6 +159,16 @@ try:
 except:
     HAVE_TE_POST_ALL_GATHER_PROCESSING = False
 
+# Detect GEMM-swizzled MXFP8 scale support in "quantize_master_weights"
+try:
+    from transformer_engine.pytorch.tensor.utils import quantize_master_weights
+
+    HAVE_TE_GEMM_SWIZZLED_MASTER_WEIGHT_SCALES = (
+        "gemm_swizzled_scales" in inspect.signature(quantize_master_weights).parameters
+    )
+except:
+    HAVE_TE_GEMM_SWIZZLED_MASTER_WEIGHT_SCALES = False
+
 
 def is_te_min_version(vers, check_equality=True):
     """Check if minimum version of `transformer-engine` is installed."""
@@ -269,11 +280,36 @@ def fp8_quantize(
     start_offsets: List[int],
     data_parallel_group: torch.distributed.ProcessGroup,
     fsdp_shard_model_params: List[Tuple[torch.Tensor, Optional[torch.Tensor]]],
+    gemm_swizzled_scales: bool = False,
 ) -> None:
-    """Quantize sharded parameters to FP8."""
+    """Quantize sharded parameters to FP8.
+
+    With ``gemm_swizzled_scales``, MXFP8 parameters receive their scales in the GEMM-swizzled
+    layout; only for parameters consumed by GEMMs that accept it.
+    """
     if len(model_params) == 0:
         return
     fsdp_shard_model_params = [x[0] if x[1] is None else x for x in fsdp_shard_model_params]
+
+    if gemm_swizzled_scales:
+        if not HAVE_TE_GEMM_SWIZZLED_MASTER_WEIGHT_SCALES:
+            raise RuntimeError(
+                "mxfp8_gemm_swizzled_weight_scales needs a Transformer Engine whose "
+                "quantize_master_weights accepts gemm_swizzled_scales"
+            )
+        kwargs = {}
+        if HAVE_TE_POST_ALL_GATHER_PROCESSING:
+            kwargs["manual_post_all_gather_processing"] = True
+        quantize_master_weights(
+            model_params,
+            main_params,
+            start_offsets,
+            data_parallel_group,
+            fsdp_shard_model_params,
+            gemm_swizzled_scales=[True] * len(model_params),
+            **kwargs,
+        )
+        return
 
     if HAVE_TE_CAST_MASTER_WEIGHTS_TO_FP8:
         args = [

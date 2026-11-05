@@ -14,7 +14,11 @@ import megatron.core.parallel_state as mpu
 from megatron.core.distributed import DistributedDataParallelConfig
 from megatron.core.distributed.finalize_model_grads import finalize_model_grads
 from megatron.core.distributed.fsdp.mcore_fsdp_adapter import FullyShardedDataParallel
-from megatron.core.distributed.fsdp.src.megatron_fsdp.mixed_precision import HAVE_TE_MXFP8TENSOR
+from megatron.core.distributed.fsdp.src.megatron_fsdp.mixed_precision import (
+    HAVE_TE_GEMM_SWIZZLED_MASTER_WEIGHT_SCALES,
+    HAVE_TE_MXFP8TENSOR,
+    fp8_need_transpose_data,
+)
 from megatron.core.fp8_utils import HAVE_TE
 from megatron.core.full_cuda_graph import FullCudaGraphWrapper, StaticBufferLoader
 from megatron.core.hyper_comm_grid import HyperCommGrid
@@ -883,6 +887,18 @@ class TestMegatronFSDPE2E:
             # Collect loss
             outputs.append(output[-1])
 
+        if kwargs.get("use_megatron_fsdp", False) and kwargs.get(
+            "mxfp8_gemm_swizzled_weight_scales", False
+        ):
+            # Dense MXFP8 weights carry GEMM-swizzled scales, expert weights compact ones.
+            checked = 0
+            for pg in model_chunks[0].module.param_and_grad_buffer.parameter_groups:
+                for p in pg.params:
+                    if fp8_need_transpose_data(p):  # MXFP8Tensor
+                        assert p._with_gemm_swizzled_scales == (not pg.is_expert_param)
+                        checked += 1
+            assert checked > 0, "no MXFP8 parameters found"
+
         Utils.destroy_model_parallel()
 
         return outputs
@@ -915,6 +931,17 @@ class TestMegatronFSDPE2E:
                     outer_dp_sharding_strategy="optim",
                 ),
                 id="optim_grads_params_mxfp8_double_buffer",
+            ),
+            pytest.param(
+                dict(
+                    data_parallel_sharding_strategy="optim_grads_params",
+                    fp8_recipe="mxfp8",
+                    fp8="e4m3",
+                    fp8_param_gather=True,
+                    bf16=True,
+                    mxfp8_gemm_swizzled_weight_scales=True,
+                ),
+                id="optim_grads_params_mxfp8_gemm_swizzled_weight_scales",
             ),
             pytest.param(
                 dict(
@@ -963,6 +990,11 @@ class TestMegatronFSDPE2E:
             torch.cuda.get_device_capability()[0] < 10 or not HAVE_TE_MXFP8TENSOR
         ):
             pytest.skip("Requires PyTorch & CUDA device with TE MXFP8Tensor support")
+        if (
+            spec_configs.get("mxfp8_gemm_swizzled_weight_scales")
+            and not HAVE_TE_GEMM_SWIZZLED_MASTER_WEIGHT_SCALES
+        ):
+            pytest.skip("Requires TE quantize_master_weights with gemm_swizzled_scales")
 
         nd_topology_str = "_".join([f"{k}{v}" for k, v in nd_topology.items()])
         if nd_topology_str not in ref_cache:

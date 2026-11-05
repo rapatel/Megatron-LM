@@ -136,6 +136,12 @@ class DistributedDataParallelConfig:
     keep_fp8_transpose_cache: bool = False
     """If true, keep the fp8 transpose cache when using Megatron FSDP."""
 
+    mxfp8_gemm_swizzled_weight_scales: bool = False
+    """If true, the Megatron-FSDP v1 master-weight cast stores the scales of dense (non-expert)
+      MXFP8 primary weights in the GEMM-swizzled layout, so GEMMs skip swizzling them on every
+      call. Requires a Transformer Engine whose quantize_master_weights accepts
+      gemm_swizzled_scales."""
+
     nccl_ub: bool = False
     """If true, allocate and register NCCL userbuffer for param and grad buffer.
       This flag enables SM efficient nccl algorithm that could improve the performance
@@ -352,6 +358,9 @@ class DistributedDataParallelConfig:
                 raise ValueError("overlap_outer_communication requires Megatron-FSDP.")
             if self.megatron_fsdp_version != 2:
                 raise ValueError("overlap_outer_communication requires Megatron-FSDP v2.")
+        if self.mxfp8_gemm_swizzled_weight_scales and self.megatron_fsdp_version != 1:
+            # v2 shards and all-gathers the scales, which needs the compact layout.
+            raise ValueError("mxfp8_gemm_swizzled_weight_scales requires Megatron-FSDP v1.")
 
         if self.reuse_grad_buf_for_mxfp8_param_ag:
             assert self.fp8_param_gather, "Reuse grad buffer only when keeping params in MXFP8."
